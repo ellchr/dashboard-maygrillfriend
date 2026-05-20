@@ -2,6 +2,7 @@ streamlit
 pandas
 numpy
 scikit-learn
+tensorflow-cpu
 mlxtend
 openpyxl
 python-calamine
