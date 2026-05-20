@@ -3,8 +3,7 @@ title: Maygrillfriend DSS
 emoji: 🥩
 colorFrom: red
 colorTo: json
-sdk: streamlit
-python_version: 3.10.12
-app_file: app.py
+sdk: docker
+app_port: 8501
 pinned: false
 ---
