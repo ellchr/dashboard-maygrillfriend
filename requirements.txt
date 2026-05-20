@@ -1,5 +1,8 @@
 streamlit
 pandas
 numpy
+scikit-learn
+tensorflow
+mlxtend
 openpyxl
 python-calamine
