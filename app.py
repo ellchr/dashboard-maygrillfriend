@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+import io
 from datetime import datetime
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import mean_absolute_error
@@ -43,8 +44,11 @@ if uploaded_file is None:
 # ==========================================
 @st.cache_data(show_spinner=False) 
 def proses_total_ai(file_bytes):
+    # MEMBUNGKUS BYTES MENJADI FILE-LIKE OBJECT AGAR CALAMINE BISA MEMBACA
+    file_object = io.BytesIO(file_bytes)
+    
     # 1. MEMBACA FILE EXCEL
-    semua_sheet = pd.read_excel(file_bytes, engine='calamine', sheet_name=None)
+    semua_sheet = pd.read_excel(file_object, engine='calamine', sheet_name=None)
     df = pd.concat(semua_sheet.values(), ignore_index=True)
     if 'Status' in df.columns:
         df = df[df['Status'] == 'Transaksi']
@@ -72,8 +76,12 @@ def proses_total_ai(file_bytes):
 
     # Pembagian Data Train & Test (30 Hari Terakhir untuk Uji)
     test_days = 30
-    X_train, X_test = X[:-test_days], X[-test_days:]
-    y_train, y_test = y[:-test_days], y[-test_days:]
+    if len(X) > test_days:
+        X_train, X_test = X[:-test_days], X[-test_days:]
+        y_train, y_test = y[:-test_days], y[-test_days:]
+    else:
+        X_train, X_test = X, X
+        y_train, y_test = y, y
 
     # 3. PROSES TRAINING RANDOM FOREST (Substitusi Ringan untuk LSTM)
     model = RandomForestRegressor(n_estimators=100, random_state=42)
@@ -86,7 +94,7 @@ def proses_total_ai(file_bytes):
     mae_model = round(mean_absolute_error(y_test, pred_means), 2)
 
     # Pemetaan Hasil Tanggal ke Kamus Aplikasi
-    dates_test = df_ml.index[-test_days:].strftime('%Y-%m-%d').tolist()
+    dates_test = df_ml.index[-len(pred_means):].strftime('%Y-%m-%d').tolist()
     pred_map = dict(zip(dates_test, pred_means))
     pred_terakhir = pred_means[-1]
 
@@ -104,6 +112,7 @@ def proses_total_ai(file_bytes):
         if frequent_itemsets.empty: return pd.DataFrame()
         
         rules = association_rules(frequent_itemsets, metric="lift", min_threshold=1.0)
+        if rules.empty: return pd.DataFrame()
         rekomendasi = rules.sort_values('lift', ascending=False).head(5)
         
         rekomendasi['Jika Pelanggan Membeli'] = rekomendasi['antecedents'].apply(lambda x: ', '.join(list(x)))
@@ -180,17 +189,9 @@ with tab3:
     
     if segmen == "Hari Kerja (Senin - Kamis)":
         st.subheader("Pola Pembelian Hari Kerja (Karakteristik: Cepat & Hemat)")
-        st.dataframe(apriori_wd, use_container_width=True)
+        if not apriori_wd.empty:
+            st.dataframe(apriori_wd, use_container_width=True)
+        else:
+            st.info("Tidak ditemukan pola kombinasi menu yang memenuhi batas minimum di hari kerja.")
     else:
-        st.subheader("Pola Pembelian Akhir Pekan (Karakteristik: Keluarga/Rombongan)")
-        st.dataframe(apriori_we, use_container_width=True)
-
-with tab4:
-    st.header("Simulasi Perencanaan Manajemen Volume")
-    target_kunjungan = st.slider("Atur Target Jumlah Transaksi Restoran Minggu Depan:", 50, 300, 150)
-    
-    col_a, col_b = st.columns(2)
-    with col_a:
-        st.metric(label="Estimasi Target Penjualan Paket Kombo", value=f"{round(target_kunjungan * 0.70)} Porsi", delta="Target Pramusaji Siang")
-    with col_b:
-        st.metric(label="Estimasi Target Penjualan Ekstra Daging", value=f"{round(target_kunjungan * 0.15)} Porsi", delta="Target Pramusaji Malam")
+        st.subheader("Pola Pembelian Akhir Pekan (Karakteristik:
