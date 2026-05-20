@@ -2,23 +2,12 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 from datetime import datetime
-
-# Impor Pustaka Sains Data & Deep Learning Asli
-from sklearn.preprocessing import MinMaxScaler
+from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import mean_absolute_error
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import LSTM, Dense, Dropout
 from mlxtend.frequent_patterns import apriori, association_rules
-import tensorflow as tf
-import random
 import warnings
 
 warnings.filterwarnings('ignore')
-
-# Menetapkan Seed agar hasil latihan selalu konsisten
-np.random.seed(42)
-tf.random.set_seed(42)
-random.seed(42)
 
 # ==========================================
 # KONFIGURASI HALAMAN UTAMA
@@ -29,7 +18,7 @@ st.set_page_config(
     layout="wide"
 )
 
-st.title("🥩 Dashboard Pendukung Keputusan (Full Real-Time AI)")
+st.title("🥩 Dashboard Pendukung Keputusan (Live ML Engine)")
 st.subheader("Maygrillfriend Korean BBQ - Cabang Salatiga")
 st.markdown("---")
 
@@ -46,7 +35,7 @@ with st.sidebar:
 # ==========================================
 if uploaded_file is None:
     st.info("👋 Selamat datang di Sistem Pendukung Keputusan Maygrillfriend.")
-    st.warning("Menunggu data... Silakan unggah file riwayat transaksi Qasir di panel sebelah kiri untuk memulai analisis AI harian.")
+    st.warning("Menunggu data... Silakan unggah file riwayat transaksi Qasir di panel sebelah kiri untuk memulai analisis harian.")
     st.stop() 
 
 # ==========================================
@@ -65,53 +54,39 @@ def proses_total_ai(file_bytes):
     tgl_awal = df['Tanggal'].min()
     tgl_akhir = df['Tanggal'].max()
 
-    # 2. AGREGASI DATA UNTUK LSTM
+    # 2. AGREGASI DATA UNTUK FORECASTING
     daily_visits = df.groupby('Tanggal')['No. Struk'].nunique().reset_index()
     daily_visits.rename(columns={'No. Struk': 'Jumlah_Kunjungan'}, inplace=True)
     daily_visits = daily_visits.set_index('Tanggal').resample('D').sum()
 
-    scaler = MinMaxScaler(feature_range=(0, 1))
-    scaled_data = scaler.fit_transform(daily_visits[['Jumlah_Kunjungan']])
-
-    test_days = 30
+    # Membuat Fitur Sekuens (Lookback Window 14 Hari)
+    df_ml = daily_visits.copy()
     look_back = 14
-    train_data = scaled_data[:-test_days]
-    test_data = scaled_data[-(test_days + look_back):]
+    for i in range(1, look_back + 1):
+        df_ml[f'Lag_{i}'] = df_ml['Jumlah_Kunjungan'].shift(i)
+        
+    df_ml = df_ml.dropna()
 
-    def create_dataset(dataset, look_back=1):
-        X, Y = [], []
-        for i in range(len(dataset) - look_back):
-            X.append(dataset[i:(i + look_back), 0])
-            Y.append(dataset[i + look_back, 0])
-        return np.array(X), np.array(Y)
+    X = df_ml.drop(columns=['Jumlah_Kunjungan']).values
+    y = df_ml['Jumlah_Kunjungan'].values
 
-    X_train, y_train = create_dataset(train_data, look_back)
-    X_test, y_test = create_dataset(test_data, look_back)
-    X_train = np.reshape(X_train, (X_train.shape[0], X_train.shape[1], 1))
-    X_test = np.reshape(X_test, (X_test.shape[0], X_test.shape[1], 1))
+    # Pembagian Data Train & Test (30 Hari Terakhir untuk Uji)
+    test_days = 30
+    X_train, X_test = X[:-test_days], X[-test_days:]
+    y_train, y_test = y[:-test_days], y[-test_days:]
 
-    # 3. PROSES TRAINING LSTM (100 EPOCHS) RIIL
-    model = Sequential()
-    model.add(LSTM(units=64, return_sequences=True, input_shape=(X_train.shape[1], 1)))
-    model.add(Dropout(0.2))
-    model.add(LSTM(units=32, return_sequences=False))
-    model.add(Dropout(0.2))
-    model.add(Dense(units=1))
-    model.compile(optimizer='adam', loss='mean_squared_error')
-    
-    # Melatih AI secara langsung di background server Streamlit
-    model.fit(X_train, y_train, epochs=100, batch_size=32, verbose=0)
+    # 3. PROSES TRAINING RANDOM FOREST (Substitusi Ringan untuk LSTM)
+    model = RandomForestRegressor(n_estimators=100, random_state=42)
+    model.fit(X_train, y_train)
 
     # 4. PREDIKSI KELUARAN MODEL
-    predicted_scaled = model.predict(X_test, verbose=0)
-    pred_means = scaler.inverse_transform(predicted_scaled)
-    pred_means = [max(0, round(val[0])) for val in pred_means]
+    pred_means = model.predict(X_test)
+    pred_means = [max(0, round(val)) for val in pred_means]
     
-    actual_test = daily_visits.iloc[-test_days:]['Jumlah_Kunjungan'].values
-    mae_lstm = round(mean_absolute_error(actual_test, pred_means), 2)
+    mae_model = round(mean_absolute_error(y_test, pred_means), 2)
 
     # Pemetaan Hasil Tanggal ke Kamus Aplikasi
-    dates_test = daily_visits.index[-test_days:].strftime('%Y-%m-%d').tolist()
+    dates_test = df_ml.index[-test_days:].strftime('%Y-%m-%d').tolist()
     pred_map = dict(zip(dates_test, pred_means))
     pred_terakhir = pred_means[-1]
 
@@ -140,17 +115,17 @@ def proses_total_ai(file_bytes):
     apriori_wd = jalankan_apriori(df_weekdays)
     apriori_we = jalankan_apriori(df_weekends)
 
-    return total_baris, tgl_awal, tgl_akhir, daily_visits, mae_lstm, pred_map, pred_terakhir, apriori_wd, apriori_we
+    return total_baris, tgl_awal, tgl_akhir, daily_visits, mae_model, pred_map, pred_terakhir, apriori_wd, apriori_we
 
 # ==========================================
 # RUNNING ENGINE & VISUALISASI LOADING
 # ==========================================
-with st.spinner("🤖 BERKAS DITERIMA! Server sedang melatih arsitektur LSTM (100 Epochs) & menghitung matriks Apriori secara live harian... Harap tunggu sekitar 1-3 menit."):
+with st.spinner("📊 BERKAS DITERIMA! Server sedang melatih model Machine Learning & mengekstrak matriks Apriori secara live harian..."):
     try:
         file_bytes = uploaded_file.getvalue()
-        (total_baris, tgl_awal, tgl_akhir, daily_visits, mae_lstm, 
+        (total_baris, tgl_awal, tgl_akhir, daily_visits, mae_model, 
          pred_map, pred_terakhir, apriori_wd, apriori_we) = proses_total_ai(file_bytes)
-        st.sidebar.success("✅ Model AI Berhasil Dilatih!")
+        st.sidebar.success("✅ Model Berhasil Dilatih!")
     except Exception as e:
         st.error(f"Terjadi kegagalan komputasi: {e}")
         st.stop()
@@ -174,13 +149,13 @@ with tab1:
         rentang_hari = (tgl_akhir - tgl_awal).days + 1
         st.metric(label="Rentang Waktu Operasional", value=f"{rentang_hari} Hari", delta=f"Hingga {tgl_akhir.strftime('%d %b %Y')}")
     with col3:
-        st.metric(label="Akurasi Pelatihan (MAE)", value=f"± {mae_lstm} Orang", delta="Hasil Training Riil Cloud")
+        st.metric(label="Akurasi Pelatihan (MAE)", value=f"± {mae_model} Orang", delta="Hasil Training Riil Cloud")
     
     st.markdown("### Grafik Tren Volume Kunjungan Harian")
     st.line_chart(daily_visits['Jumlah_Kunjungan'])
 
 with tab2:
-    st.header("Kalkulator Kebutuhan Bahan Baku (Prediksi LSTM)")
+    st.header("Kalkulator Kebutuhan Bahan Baku (Prediksi Model)")
     st.markdown("Fitur ini membantu kepala dapur menentukan jumlah daging segar yang aman untuk dicairkan (*thawing*) harian.")
     
     col_in, col_out = st.columns([1, 2])
@@ -191,8 +166,8 @@ with tab2:
         tgl_str = tgl_pilihan.strftime('%Y-%m-%d')
         angka_prediksi = pred_map.get(tgl_str, pred_terakhir)
             
-        batas_bawah = max(0, round(angka_prediksi - mae_lstm))
-        batas_atas = round(angka_prediksi + mae_lstm)
+        batas_bawah = max(0, round(angka_prediksi - mae_model))
+        batas_atas = round(angka_prediksi + mae_model)
         
         st.info(f"**📋 Hasil Rekomendasi Sistem Untuk Tanggal: {tgl_pilihan.strftime('%d %B %Y')}**")
         st.markdown(f"Estimasi Kunjungan Utama: `{angka_prediksi} Kunjungan`")
